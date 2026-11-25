@@ -153,18 +153,25 @@ export async function lockSessionOperation(database: Database, storeId: string, 
   return getSession(database, storeId, sessionId, true);
 }
 
-export async function reserveItem(database: Database, sessionId: string, productId: string, actorId: string, token: string): Promise<boolean> {
+export async function reserveItem(
+  database: Database,
+  sessionId: string,
+  productId: string,
+  actorId: string,
+  token: string,
+  reservationActiveSeconds: number,
+): Promise<boolean> {
   const result = await database.query(
     `UPDATE stock_opname_items item
      SET reservation_token = $4, reserved_by = $3, reservation_version = balance.version,
-         reservation_expires_at = transaction_timestamp() + interval '10 minutes'
+         reservation_expires_at = transaction_timestamp() + ($5 * interval '1 second')
      FROM stock_opname_sessions session, inventory_balances balance
      WHERE item.session_id = $1 AND item.product_id = $2
        AND session.id = item.session_id AND session.status = 'COUNTING'
        AND balance.store_id = session.store_id AND balance.product_id = item.product_id
        AND item.counted_qty IS NULL
        AND (item.reservation_token IS NULL OR item.reservation_expires_at <= transaction_timestamp())`,
-    [sessionId, productId, actorId, token],
+    [sessionId, productId, actorId, token, reservationActiveSeconds],
   );
   return result.rowCount === 1;
 }

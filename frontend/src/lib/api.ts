@@ -10,14 +10,24 @@ export type MovementKind = "receipt" | "stock-out";
 export type MovementResult = { id: string; productId: string; movementType: "RECEIPT" | "STOCK_OUT" | "OPENING_BALANCE" | "STOCK_OPNAME_ADJUSTMENT"; quantityDelta: string; inventoryVersion: string; balanceQuantity: string; referenceType: string; referenceId: string };
 export type MovementHistoryItem = Omit<MovementResult, "balanceQuantity"> & { sku: string; name: string; unit: string; createdAt: string };
 export type MovementHistoryPage = { items: MovementHistoryItem[]; nextCursor: string | null };
-type ApiError = { error?: { message?: string; code?: string } };
+type ApiErrorBody = { error?: { message?: string; code?: string } };
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 const url = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 let token: string | null = typeof window === "undefined" ? null : sessionStorage.getItem("stock-opname-token");
 export function setToken(value: string | null) { token = value; if (typeof window !== "undefined") { if (value) sessionStorage.setItem("stock-opname-token", value); else sessionStorage.removeItem("stock-opname-token"); } }
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${url}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers } });
-  if (!response.ok) { const body = await response.json().catch(() => ({})) as ApiError; throw new Error(body.error?.message ?? `Request failed (${response.status})`); }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as ApiErrorBody;
+    throw new ApiError(body.error?.message ?? `Request failed (${response.status})`, response.status, body.error?.code);
+  }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }

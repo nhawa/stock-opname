@@ -63,12 +63,13 @@ export async function reserveCount(
   actorId: string,
   sessionId: string,
   productId: string,
+  reservationActiveSeconds: number,
 ): Promise<StockOpnameItem> {
   return withTransaction(database, async (client) => {
     const session = await lockSessionOperation(client, storeId, sessionId);
     if (!session) throw new AppError(404, 'SESSION_NOT_FOUND', 'Stock opname session not found.');
     if (session.status !== 'COUNTING') throw new AppError(409, 'SESSION_NOT_COUNTING', 'Session is not accepting counts.');
-    const reserved = await reserveItem(client, sessionId, productId, actorId, randomUUID());
+    const reserved = await reserveItem(client, sessionId, productId, actorId, randomUUID(), reservationActiveSeconds);
     if (!reserved) throw new AppError(409, 'COUNT_RESERVATION_CONFLICT', 'Count reservation is unavailable.');
     const [item] = await listItems(client, sessionId, [productId]);
     if (!item) throw new AppError(404, 'SESSION_ITEM_NOT_FOUND', 'Session item not found.');
@@ -190,6 +191,10 @@ export async function submitSession(
     const reservationExpiresAt = await hasLiveReservations(client, sessionId);
     if (reservationExpiresAt) {
       throw new AppError(409, 'COUNT_RESERVATIONS_ACTIVE', `Count reservation remains active until ${reservationExpiresAt}.`);
+    }
+    const items = await listItems(client, sessionId);
+    if (!items.some((item) => item.countedQty !== null)) {
+      throw new AppError(409, 'NO_PHYSICAL_COUNTS', 'Enter at least one physical count before submitting the session.');
     }
     if (!await updateSessionSubmission(client, sessionId, actorId)) {
       throw new AppError(409, 'SESSION_NOT_COUNTING', 'Session is not accepting counts.');

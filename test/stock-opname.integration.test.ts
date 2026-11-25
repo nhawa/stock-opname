@@ -8,7 +8,10 @@ import type { AppConfig } from '../src/types.js';
 const databaseUrl = process.env.DATABASE_URL_TEST;
 if (!databaseUrl) throw new Error('DATABASE_URL_TEST is required to run API integration tests.');
 
-const config: AppConfig = { jwt: { secret: 'test-jwt-secret-that-is-at-least-thirty-two-characters', issuer: 'stock-opname-api-test', audience: 'stock-opname-client-test', expiresInSeconds: 900 } };
+const config: AppConfig = {
+  jwt: { secret: 'test-jwt-secret-that-is-at-least-thirty-two-characters', issuer: 'stock-opname-api-test', audience: 'stock-opname-client-test', expiresInSeconds: 900 },
+  stockOpname: { countReservationActiveSeconds: 600 },
+};
 const pool = new Pool({ connectionString: databaseUrl });
 const app = createApp(config, pool);
 const jakartaStore = '11111111-1111-1111-1111-111111111111';
@@ -124,6 +127,20 @@ async function submitCount(manager: string, staff: string, quantity: string): Pr
   await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
   return session;
 }
+
+test('cannot submit a session without a physical count', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await createSession(manager);
+
+  const response = await request(app)
+    .post(`/api/stock-opname/sessions/${session.id}/submit`)
+    .set('Authorization', `Bearer ${staff}`)
+    .send({})
+    .expect(409);
+
+  assert.equal(response.body.code, 'NO_PHYSICAL_COUNTS');
+});
 
 test('manager review and approval reconcile against cutoff while preserving later movements', async () => {
   const manager = await login('manager.jakarta@example.test');

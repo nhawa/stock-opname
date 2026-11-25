@@ -15,6 +15,7 @@ const config: AppConfig = {
     audience: 'stock-opname-client-test',
     expiresInSeconds: 900,
   },
+  stockOpname: { countReservationActiveSeconds: 600 },
 };
 const pool = new Pool({ connectionString: databaseUrl });
 const app = createApp(config, pool);

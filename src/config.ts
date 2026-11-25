@@ -7,6 +7,7 @@ const environmentSchema = z.object({
   JWT_ISSUER: z.string().min(1).default('stock-opname-api'),
   JWT_AUDIENCE: z.string().min(1).default('stock-opname-client'),
   JWT_EXPIRES_IN_SECONDS: z.coerce.number().int().positive().max(3600).default(900),
+  COUNT_RESERVATION_ACTIVE_SECONDS: z.coerce.number().int().positive().max(86_400).default(90),
   PORT: z.coerce.number().int().positive().max(65535).default(3000),
 });
 
@@ -29,6 +30,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): Runtim
       issuer: parsed.data.JWT_ISSUER,
       audience: parsed.data.JWT_AUDIENCE,
       expiresInSeconds: parsed.data.JWT_EXPIRES_IN_SECONDS,
+    },
+    stockOpname: {
+      countReservationActiveSeconds: parsed.data.COUNT_RESERVATION_ACTIVE_SECONDS,
     },
   };
 }

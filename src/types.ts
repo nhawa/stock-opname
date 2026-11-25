@@ -24,4 +24,7 @@ export interface AppConfig {
     audience: string;
     expiresInSeconds: number;
   };
+  stockOpname: {
+    countReservationActiveSeconds: number;
+  };
 }

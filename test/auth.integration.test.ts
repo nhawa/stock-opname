@@ -18,6 +18,7 @@ const config: AppConfig = {
     audience: 'stock-opname-client-test',
     expiresInSeconds: 900,
   },
+  stockOpname: { countReservationActiveSeconds: 600 },
 };
 
 const jakartaStore = '11111111-1111-1111-1111-111111111111';

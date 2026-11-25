@@ -51,7 +51,14 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
       requireJson(request.is('application/json'));
       const sessionId = uuidSchema.parse(request.params.sessionId);
       const body = reservationSchema.parse(request.body);
-      response.status(201).json(await reserveCount(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId, body.productId));
+      response.status(201).json(await reserveCount(
+        requireTransactionDatabase(database),
+        request.auth!.storeId,
+        request.auth!.id,
+        sessionId,
+        body.productId,
+        config.stockOpname.countReservationActiveSeconds,
+      ));
     } catch (error) { next(error); }
   });
 
