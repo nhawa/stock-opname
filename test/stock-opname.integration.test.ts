@@ -14,6 +14,7 @@ const config: AppConfig = {
 };
 const pool = new Pool({ connectionString: databaseUrl });
 const app = createApp(config, pool);
+const shortReservationApp = createApp({ ...config, stockOpname: { countReservationActiveSeconds: 1 } }, pool);
 const jakartaStore = '11111111-1111-1111-1111-111111111111';
 const bandungStore = '11111111-1111-1111-1111-111111111112';
 const rice = '33333333-3333-3333-3333-333333333301';
@@ -139,7 +140,7 @@ test('cannot submit a session without a physical count', async () => {
     .send({})
     .expect(409);
 
-  assert.equal(response.body.code, 'NO_PHYSICAL_COUNTS');
+  assert.equal(response.body.error.code, 'NO_PHYSICAL_COUNTS');
 });
 
 test('manager review and approval reconcile against cutoff while preserving later movements', async () => {
@@ -166,6 +167,76 @@ test('manager review and approval reconcile against cutoff while preserving late
   const balance = await pool.query<{ quantity: string; version: string }>('SELECT quantity::text AS quantity, version::text AS version FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
   assert.equal(balance.rows[0]!.quantity, (Number(snapshot.snapshotQty) + 13).toFixed(3));
   assert.equal(Number(balance.rows[0]!.version), Number(snapshot.snapshotVersion) + 3);
+});
+
+test('concurrent manager approval creates exactly one set of adjustments', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await submitCount(manager, staff, '0');
+
+  const [first, second] = await Promise.all([
+    request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}),
+    request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}),
+  ]);
+  assert.equal([first.status, second.status].filter((status) => status === 200).length, 1);
+  assert.equal([first.status, second.status].filter((status) => status === 409).length, 1);
+  const adjustments = await pool.query(
+    "SELECT product_id FROM inventory_movements WHERE stock_opname_session_id = $1 AND movement_type = 'STOCK_OPNAME_ADJUSTMENT'",
+    [session.id],
+  );
+  assert.equal(adjustments.rows.filter((adjustment) => adjustment.product_id === rice).length, 1);
+});
+
+test('approval rolls back its adjustments when audit persistence fails', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await submitCount(manager, staff, '0');
+  await pool.query(`CREATE FUNCTION test_reject_approval_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected approval audit failure'; END; $$`);
+  await pool.query('CREATE TRIGGER test_reject_approval_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION test_reject_approval_audit()');
+  try {
+    await request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}).expect(500);
+    const state = await pool.query<{ status: string }>('SELECT status FROM stock_opname_sessions WHERE id = $1', [session.id]);
+    assert.equal(state.rows[0]!.status, 'SUBMITTED');
+    const adjustments = await pool.query("SELECT 1 FROM inventory_movements WHERE stock_opname_session_id = $1 AND movement_type = 'STOCK_OPNAME_ADJUSTMENT'", [session.id]);
+    assert.equal(adjustments.rowCount, 0);
+  } finally {
+    await pool.query('DROP TRIGGER IF EXISTS test_reject_approval_audit ON audit_logs');
+    await pool.query('DROP FUNCTION IF EXISTS test_reject_approval_audit()');
+  }
+});
+
+test('expired reservations can be reclaimed and cannot save using the stale token', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await createSession(manager);
+  const staleResponse = await request(shortReservationApp)
+    .post(`/api/stock-opname/sessions/${session.id}/counts/reservations`)
+    .set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(201);
+  const stale = staleResponse.body as { reservationToken: string; draftVersion: string };
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  const replacementResponse = await request(shortReservationApp)
+    .post(`/api/stock-opname/sessions/${session.id}/counts/reservations`)
+    .set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(201);
+  const replacement = replacementResponse.body as { reservationToken: string; draftVersion: string };
+  const staleSave = await save(staff, session.id, rice, stale.reservationToken, stale.draftVersion, '1');
+  assert.equal(staleSave.status, 409);
+  const recoveredSave = await save(staff, session.id, rice, replacement.reservationToken, replacement.draftVersion, '1');
+  assert.equal(recoveredSave.status, 200);
+});
+
+test('approval creates no adjustment for uncounted items', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await submitCount(manager, staff, '0');
+  await request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}).expect(200);
+  const uncountedAdjustments = await pool.query(
+    `SELECT movement.id
+     FROM inventory_movements movement
+     JOIN stock_opname_items item ON item.session_id = movement.stock_opname_session_id AND item.product_id = movement.product_id
+     WHERE movement.stock_opname_session_id = $1 AND movement.movement_type = 'STOCK_OPNAME_ADJUSTMENT' AND item.counted_qty IS NULL`,
+    [session.id],
+  );
+  assert.equal(uncountedAdjustments.rowCount, 0);
 });
 
 test('rejection preserves inventory and permits a recount session', async () => {
