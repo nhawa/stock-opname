@@ -7,6 +7,7 @@ import {
   findActiveProduct,
   findMovementByIdempotencyKey,
   historicalQuantity,
+  hasLiveCountReservation,
   insertMovement,
   lockBalance,
   toMovementResult,
@@ -34,6 +35,9 @@ export async function createInventoryMovement(
 
     await ensureBalance(client, command.storeId, command.productId);
     const balance = await lockBalance(client, command.storeId, command.productId);
+    if (await hasLiveCountReservation(client, command.storeId, command.productId)) {
+      throw new AppError(409, 'COUNT_IN_PROGRESS', 'A physical count is in progress for this product.');
+    }
 
     const existingAfterBalanceLock = await findMovementByIdempotencyKey(client, command.storeId, command.idempotencyKey);
     if (existingAfterBalanceLock) return replayOrReject(client, command, existingAfterBalanceLock);

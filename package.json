@@ -10,7 +10,7 @@
     "db:typecheck": "tsc --noEmit",
     "db:verify": "tsx --test test/database-schema.test.ts",
     "api:dev": "tsx src/server.ts",
-    "test:api": "tsx --test --test-concurrency=1 test/auth.integration.test.ts test/inventory.integration.test.ts",
+    "test:api": "tsx --test --test-concurrency=1 test/auth.integration.test.ts test/inventory.integration.test.ts test/stock-opname.integration.test.ts",
     "test:all": "npm run db:verify && npm run test:api"
   },
   "dependencies": {

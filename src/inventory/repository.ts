@@ -87,6 +87,21 @@ export async function findMovementByIdempotencyKey(
   return result.rows[0] ?? null;
 }
 
+export async function hasLiveCountReservation(database: Database, storeId: string, productId: string): Promise<boolean> {
+  const result = await database.query(
+    `SELECT 1
+     FROM stock_opname_items item
+     JOIN stock_opname_sessions session ON session.id = item.session_id
+     WHERE session.store_id = $1
+       AND item.product_id = $2
+       AND session.status = 'COUNTING'
+       AND item.reservation_expires_at > transaction_timestamp()
+     LIMIT 1`,
+    [storeId, productId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function insertMovement(
   database: Database,
   values: {
