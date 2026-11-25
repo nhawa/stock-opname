@@ -86,6 +86,51 @@ test('manager posts idempotent inventory movements and staff may only read', asy
   assert.equal(balance.version, '2');
 });
 
+test('movement history is paginated, manager-only, and isolated by authenticated store', async () => {
+  const jakartaManager = await login('manager.jakarta@example.test');
+  const bandungManager = await login('manager.bandung@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const testKey = `movement-history-${Date.now()}`;
+  const receiptReference = `${testKey}-receipt`;
+  const stockOutReference = `${testKey}-stock-out`;
+  try {
+    await request(app).get('/api/inventory/movements').expect(401);
+    await request(app).get('/api/inventory/movements').set('Authorization', `Bearer ${staff}`).expect(403);
+    await request(app)
+      .post('/api/inventory/receipts')
+      .set('Authorization', `Bearer ${jakartaManager}`)
+      .send({ productId: rice, quantity: '8', referenceType: 'GOODS_RECEIPT', referenceId: receiptReference, idempotencyKey: receiptReference })
+      .expect(201);
+    await request(app)
+      .post('/api/inventory/stock-outs')
+      .set('Authorization', `Bearer ${jakartaManager}`)
+      .send({ productId: rice, quantity: '2', referenceType: 'STOCK_OUT', referenceId: stockOutReference, idempotencyKey: stockOutReference })
+      .expect(201);
+
+    const firstPage = await request(app).get('/api/inventory/movements').query({ limit: 1 }).set('Authorization', `Bearer ${jakartaManager}`).expect(200);
+    assert.equal(firstPage.body.items.length, 1);
+    assert.equal(firstPage.body.items[0].referenceId, stockOutReference);
+    assert.equal(firstPage.body.items[0].movementType, 'STOCK_OUT');
+    assert.equal(firstPage.body.items[0].quantityDelta, '-2.000');
+    assert.equal(firstPage.body.items[0].sku, 'RICE-5KG');
+    assert.equal(typeof firstPage.body.nextCursor, 'string');
+    const secondPage = await request(app).get('/api/inventory/movements').query({ limit: 1, cursor: firstPage.body.nextCursor }).set('Authorization', `Bearer ${jakartaManager}`).expect(200);
+    assert.equal(secondPage.body.items[0].referenceId, receiptReference);
+    assert.ok(secondPage.body.items.every((item: { referenceId: string }) => item.referenceId !== 'opening-bdg-rice'));
+
+    const bandungHistory = await request(app).get('/api/inventory/movements').query({ limit: 100 }).set('Authorization', `Bearer ${bandungManager}`).expect(200);
+    assert.ok(bandungHistory.body.items.some((item: { referenceId: string }) => item.referenceId === 'opening-bdg-rice'));
+    assert.ok(bandungHistory.body.items.every((item: { referenceId: string }) => !item.referenceId.startsWith(testKey)));
+    const bandungWithJakartaCursor = await request(app).get('/api/inventory/movements').query({ limit: 100, cursor: firstPage.body.nextCursor }).set('Authorization', `Bearer ${bandungManager}`).expect(200);
+    assert.ok(bandungWithJakartaCursor.body.items.every((item: { referenceId: string }) => !item.referenceId.startsWith(testKey)));
+    await request(app).get('/api/inventory/movements').query({ limit: 101 }).set('Authorization', `Bearer ${jakartaManager}`).expect(400);
+    await request(app).get('/api/inventory/movements').query({ cursor: 'not-a-cursor' }).set('Authorization', `Bearer ${jakartaManager}`).expect(400);
+  } finally {
+    await pool.query('DELETE FROM inventory_movements WHERE store_id = $1 AND reference_id IN ($2, $3)', [jakartaStore, receiptReference, stockOutReference]);
+    await pool.query('UPDATE inventory_balances SET quantity = 0, version = 0 WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
+  }
+});
+
 test('idempotency key cannot be repurposed', async () => {
   const manager = await login('manager.jakarta@example.test');
   await request(app)

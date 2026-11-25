@@ -1,6 +1,6 @@
 import type { QueryResultRow } from 'pg';
 import type { Database } from '../types.js';
-import type { InventoryBalance, InventoryMovementResult, InventoryProduct, MovementType } from './types.js';
+import type { InventoryBalance, InventoryMovementHistoryItem, InventoryMovementHistoryPage, InventoryMovementResult, InventoryProduct, MovementType } from './types.js';
 
 interface ProductRow extends QueryResultRow {
   id: string;
@@ -24,6 +24,13 @@ interface MovementRow extends QueryResultRow {
   inventory_version: string;
   reference_type: string;
   reference_id: string;
+}
+
+interface MovementHistoryRow extends MovementRow {
+  sku: string;
+  name: string;
+  unit: string;
+  created_at: string;
 }
 
 export async function findActiveProduct(database: Database, productId: string): Promise<InventoryProduct | null> {
@@ -118,6 +125,52 @@ export async function findMovementByIdempotencyKey(
     [storeId, idempotencyKey],
   );
   return result.rows[0] ?? null;
+}
+
+export async function listStoreMovements(
+  database: Database,
+  storeId: string,
+  options: { limit: number; cursor: { createdAt: string; id: string } | null },
+): Promise<InventoryMovementHistoryPage> {
+  const result = await database.query<MovementHistoryRow>(
+    `SELECT movement.id, movement.product_id, product.sku, product.name, product.unit,
+            movement.movement_type, movement.quantity_delta::text AS quantity_delta,
+            movement.inventory_version::text AS inventory_version, movement.reference_type,
+            movement.reference_id,
+            to_char(movement.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at
+     FROM inventory_movements movement
+     JOIN products product ON product.id = movement.product_id
+     WHERE movement.store_id = $1
+       AND ($2::timestamptz IS NULL OR (movement.created_at, movement.id) < ($2::timestamptz, $3::uuid))
+     ORDER BY movement.created_at DESC, movement.id DESC
+     LIMIT $4`,
+    [storeId, options.cursor?.createdAt ?? null, options.cursor?.id ?? null, options.limit + 1],
+  );
+  const hasMore = result.rows.length > options.limit;
+  const rows = hasMore ? result.rows.slice(0, options.limit) : result.rows;
+  const items = rows.map(toMovementHistoryItem);
+  const last = items.at(-1);
+  return { items, nextCursor: hasMore && last ? encodeMovementCursor(last) : null };
+}
+
+function toMovementHistoryItem(row: MovementHistoryRow): InventoryMovementHistoryItem {
+  return {
+    id: row.id,
+    productId: row.product_id,
+    sku: row.sku,
+    name: row.name,
+    unit: row.unit,
+    movementType: row.movement_type,
+    quantityDelta: row.quantity_delta,
+    inventoryVersion: row.inventory_version,
+    referenceType: row.reference_type,
+    referenceId: row.reference_id,
+    createdAt: row.created_at,
+  };
+}
+
+function encodeMovementCursor(item: InventoryMovementHistoryItem): string {
+  return Buffer.from(JSON.stringify({ createdAt: item.createdAt, id: item.id })).toString('base64url');
 }
 
 export async function hasLiveCountReservation(database: Database, storeId: string, productId: string): Promise<boolean> {

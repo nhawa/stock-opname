@@ -23,6 +23,25 @@ export interface InventoryMovementResult {
   referenceId: string;
 }
 
+export interface InventoryMovementHistoryItem {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  unit: string;
+  movementType: MovementType;
+  quantityDelta: string;
+  inventoryVersion: string;
+  referenceType: string;
+  referenceId: string;
+  createdAt: string;
+}
+
+export interface InventoryMovementHistoryPage {
+  items: InventoryMovementHistoryItem[];
+  nextCursor: string | null;
+}
+
 export interface InventoryProduct {
   id: string;
   sku: string;

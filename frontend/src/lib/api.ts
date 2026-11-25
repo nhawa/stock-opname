@@ -4,6 +4,12 @@ export type User = { id: string; storeId: string; email: string; name: string; r
 export type SessionItem = { id: string; productId: string; sku: string; name: string; unit: string; snapshotQty: string; snapshotVersion: string; countedQty: string | null; countCutoffVersion: string | null; countedAt: string | null; countedBy: string | null; draftVersion: string; reservationToken: string | null; reservedBy: string | null; reservationVersion: string | null; reservationExpiresAt: string | null };
 export type Session = { id: string; storeId: string; status: Status; initiatedBy: string; initiatedAt: string; submittedBy: string | null; submittedAt: string | null; approvedBy: string | null; approvedAt: string | null; rejectedBy: string | null; rejectedAt: string | null; rejectionReason: string | null; items?: SessionItem[] };
 export type Review = Omit<Session, "items"> & { items: (SessionItem & { expectedAtCount: string; variance: string })[] };
+export type InventoryBalance = { id: string; sku: string; name: string; unit: string; quantity: string; version: string };
+export type InventoryProduct = { id: string; sku: string; name: string; unit: string };
+export type MovementKind = "receipt" | "stock-out";
+export type MovementResult = { id: string; productId: string; movementType: "RECEIPT" | "STOCK_OUT" | "OPENING_BALANCE" | "STOCK_OPNAME_ADJUSTMENT"; quantityDelta: string; inventoryVersion: string; balanceQuantity: string; referenceType: string; referenceId: string };
+export type MovementHistoryItem = Omit<MovementResult, "balanceQuantity"> & { sku: string; name: string; unit: string; createdAt: string };
+export type MovementHistoryPage = { items: MovementHistoryItem[]; nextCursor: string | null };
 type ApiError = { error?: { message?: string; code?: string } };
 
 const url = process.env.NEXT_PUBLIC_API_URL ?? "/api";
@@ -28,4 +34,8 @@ export const api = {
   review: (id: string) => request<Review>(`/stock-opname/sessions/${id}/review`),
   approve: (id: string) => request<Session>(`/stock-opname/sessions/${id}/approve`, { method: "POST", body: "{}" }),
   reject: (id: string, reason: string) => request<Session>(`/stock-opname/sessions/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
+  inventory: () => request<InventoryBalance[]>("/inventory"),
+  products: () => request<InventoryProduct[]>("/products"),
+  movementHistory: (cursor?: string) => request<MovementHistoryPage>(`/inventory/movements${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
+  movement: (kind: MovementKind, values: { productId: string; quantity: string; referenceId: string; idempotencyKey: string }) => request<MovementResult>(`/inventory/${kind === "receipt" ? "receipts" : "stock-outs"}`, { method: "POST", body: JSON.stringify({ ...values, referenceType: kind === "receipt" ? "GOODS_RECEIPT" : "STOCK_OUT" }) }),
 };

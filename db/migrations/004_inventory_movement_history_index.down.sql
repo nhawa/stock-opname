@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS inventory_movements_store_created_at_id_desc_idx;
