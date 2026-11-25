@@ -17,6 +17,7 @@ const rice = '33333333-3333-3333-3333-333333333301';
 
 beforeEach(async () => {
   await pool.query('DELETE FROM audit_logs WHERE session_id IN (SELECT id FROM stock_opname_sessions WHERE store_id IN ($1, $2))', [jakartaStore, bandungStore]);
+  await pool.query("DELETE FROM inventory_movements WHERE movement_type = 'STOCK_OPNAME_ADJUSTMENT' AND stock_opname_session_id IN (SELECT id FROM stock_opname_sessions WHERE store_id IN ($1, $2))", [jakartaStore, bandungStore]);
   await pool.query('DELETE FROM stock_opname_items WHERE session_id IN (SELECT id FROM stock_opname_sessions WHERE store_id IN ($1, $2))', [jakartaStore, bandungStore]);
   await pool.query('DELETE FROM stock_opname_sessions WHERE store_id IN ($1, $2)', [jakartaStore, bandungStore]);
 });
@@ -114,6 +115,49 @@ test('concurrent drafts resolve to one save and a stale-draft conflict', async (
   ]);
   assert.equal([first.status, second.status].filter((status) => status === 200).length, 1);
   assert.equal([first.status, second.status].filter((status) => status === 409).length, 1);
+});
+
+async function submitCount(manager: string, staff: string, quantity: string): Promise<{ id: string }> {
+  const session = await createSession(manager);
+  const reservation = await reserve(staff, session.id);
+  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, quantity).then((response) => assert.equal(response.status, 200));
+  await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
+  return session;
+}
+
+test('manager review and approval reconcile against cutoff while preserving later movements', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await createSession(manager);
+  const snapshot = session.items.find((item) => item.productId === rice)!;
+  await request(app).post('/api/inventory/stock-outs').set('Authorization', `Bearer ${manager}`)
+    .send({ productId: rice, quantity: '5', referenceType: 'STOCK_OUT', referenceId: `review-sale-${session.id}`, idempotencyKey: `review-sale-${session.id}` }).expect(201);
+  const reservation = await reserve(staff, session.id);
+  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '93').then((response) => assert.equal(response.status, 200));
+  await request(app).post('/api/inventory/receipts').set('Authorization', `Bearer ${manager}`)
+    .send({ productId: rice, quantity: '20', referenceType: 'GOODS_RECEIPT', referenceId: `review-receipt-${session.id}`, idempotencyKey: `review-receipt-${session.id}` }).expect(201);
+  await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
+
+  const review = await request(app).get(`/api/stock-opname/sessions/${session.id}/review`).set('Authorization', `Bearer ${manager}`).expect(200);
+  const item = review.body.items.find((candidate: { productId: string }) => candidate.productId === rice);
+  assert.equal(item.expectedAtCount, '95.000');
+  assert.equal(item.variance, '-2.000');
+  const approved = await request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}).expect(200);
+  assert.equal(approved.body.status, 'APPROVED');
+  const balance = await pool.query<{ quantity: string; version: string }>('SELECT quantity::text AS quantity, version::text AS version FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
+  assert.equal(balance.rows[0]!.quantity, '113.000');
+  assert.equal(Number(balance.rows[0]!.version), Number(snapshot.snapshotVersion) + 4);
+});
+
+test('rejection preserves inventory and permits a recount session', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await submitCount(manager, staff, '0');
+  const before = await pool.query('SELECT quantity::text, version::text FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
+  await request(app).post(`/api/stock-opname/sessions/${session.id}/reject`).set('Authorization', `Bearer ${manager}`).send({ reason: 'Recount required' }).expect(200);
+  const after = await pool.query('SELECT quantity::text, version::text FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
+  assert.deepEqual(after.rows, before.rows);
+  await createSession(manager);
 });
 
 test('submission leaves inventory unchanged and blocks later edits', async () => {

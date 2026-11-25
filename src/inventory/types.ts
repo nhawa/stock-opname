@@ -1,4 +1,4 @@
-export const movementTypes = ['OPENING_BALANCE', 'RECEIPT', 'STOCK_OUT'] as const;
+export const movementTypes = ['OPENING_BALANCE', 'RECEIPT', 'STOCK_OUT', 'STOCK_OPNAME_ADJUSTMENT'] as const;
 export type MovementType = (typeof movementTypes)[number];
 
 export interface InventoryCommand {

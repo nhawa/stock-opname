@@ -27,5 +27,19 @@ export interface StockOpnameSession {
   initiatedAt: string;
   submittedBy: string | null;
   submittedAt: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectedBy: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
   items?: StockOpnameItem[];
+}
+
+export interface StockOpnameReviewItem extends StockOpnameItem {
+  expectedAtCount: string;
+  variance: string;
+}
+
+export interface StockOpnameReview extends Omit<StockOpnameSession, 'items'> {
+  items: StockOpnameReviewItem[];
 }

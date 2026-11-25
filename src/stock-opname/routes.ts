@@ -3,13 +3,16 @@ import { z } from 'zod';
 import { authenticate, requireRoles } from '../auth/middleware.js';
 import { AppError } from '../errors.js';
 import type { AppConfig, Database, TransactionCapableDatabase } from '../types.js';
-import { getSessionDetail, initiateSession, listStoreSessions, reserveCount, saveDraftCounts, submitSession } from './service.js';
+import { approveSession, getSessionDetail, getSessionReview, initiateSession, listStoreSessions, rejectSession, reserveCount, saveDraftCounts, submitSession } from './service.js';
 
 const uuidSchema = z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
 );
 const quantitySchema = z.string().regex(/^(?:0|[1-9]\d{0,10})(?:\.\d{1,3})?$/);
 const reservationSchema = z.object({ productId: uuidSchema }).strict();
+const rejectionSchema = z.object({
+  reason: z.string().trim().min(1).max(1_000),
+}).strict();
 const draftSchema = z.object({
   counts: z.array(z.object({
     productId: uuidSchema,
@@ -60,6 +63,30 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
       const ids = new Set(body.counts.map((count) => count.productId));
       if (ids.size !== body.counts.length) throw new AppError(400, 'VALIDATION_ERROR', 'Each product may appear only once.');
       response.status(200).json(await saveDraftCounts(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId, body.counts));
+    } catch (error) { next(error); }
+  });
+
+  router.get('/stock-opname/sessions/:sessionId/review', auth, requireRoles('MANAGER'), async (request, response, next) => {
+    try {
+      const sessionId = uuidSchema.parse(request.params.sessionId);
+      response.status(200).json(await getSessionReview(requireTransactionDatabase(database), request.auth!.storeId, sessionId));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/stock-opname/sessions/:sessionId/approve', auth, requireRoles('MANAGER'), async (request, response, next) => {
+    try {
+      requireJson(request.is('application/json'));
+      const sessionId = uuidSchema.parse(request.params.sessionId);
+      response.status(200).json(await approveSession(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/stock-opname/sessions/:sessionId/reject', auth, requireRoles('MANAGER'), async (request, response, next) => {
+    try {
+      requireJson(request.is('application/json'));
+      const sessionId = uuidSchema.parse(request.params.sessionId);
+      const body = rejectionSchema.parse(request.body);
+      response.status(200).json(await rejectSession(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId, body.reason));
     } catch (error) { next(error); }
   });
 

@@ -10,6 +10,11 @@ interface SessionRow extends QueryResultRow {
   initiated_at: Date;
   submitted_by: string | null;
   submitted_at: Date | null;
+  approved_by: string | null;
+  approved_at: Date | null;
+  rejected_by: string | null;
+  rejected_at: Date | null;
+  rejection_reason: string | null;
 }
 
 interface ItemRow extends QueryResultRow {
@@ -92,13 +97,23 @@ export async function insertSessionWithItems(
   return sessionId;
 }
 
-export async function insertAudit(database: Database, sessionId: string, actorId: string, action: string): Promise<void> {
-  await database.query('INSERT INTO audit_logs (session_id, actor_id, action) VALUES ($1, $2, $3)', [sessionId, actorId, action]);
+export async function insertAudit(
+  database: Database,
+  sessionId: string,
+  actorId: string,
+  action: string,
+  metadata: unknown = {},
+): Promise<void> {
+  await database.query(
+    'INSERT INTO audit_logs (session_id, actor_id, action, metadata) VALUES ($1, $2, $3, $4::jsonb)',
+    [sessionId, actorId, action, JSON.stringify(metadata)],
+  );
 }
 
 export async function listSessions(database: Database, storeId: string): Promise<StockOpnameSession[]> {
   const result = await database.query<SessionRow>(
-    `SELECT id, store_id, status, initiated_by, initiated_at, submitted_by, submitted_at
+    `SELECT id, store_id, status, initiated_by, initiated_at, submitted_by, submitted_at,
+            approved_by, approved_at, rejected_by, rejected_at, rejection_reason
      FROM stock_opname_sessions WHERE store_id = $1 ORDER BY initiated_at DESC`,
     [storeId],
   );
@@ -107,7 +122,8 @@ export async function listSessions(database: Database, storeId: string): Promise
 
 export async function getSession(database: Database, storeId: string, sessionId: string, lock = false): Promise<StockOpnameSession | null> {
   const result = await database.query<SessionRow>(
-    `SELECT id, store_id, status, initiated_by, initiated_at, submitted_by, submitted_at
+    `SELECT id, store_id, status, initiated_by, initiated_at, submitted_by, submitted_at,
+            approved_by, approved_at, rejected_by, rejected_at, rejection_reason
      FROM stock_opname_sessions WHERE id = $1 AND store_id = $2${lock ? ' FOR UPDATE' : ''}`,
     [sessionId, storeId],
   );
@@ -196,11 +212,134 @@ export async function submitSession(database: Database, sessionId: string, actor
   return result.rowCount === 1;
 }
 
+export async function listCountedItemsForApproval(database: Database, sessionId: string): Promise<StockOpnameItem[]> {
+  const result = await database.query<ItemRow>(
+    `SELECT i.id, i.product_id, p.sku, p.name, p.unit,
+            i.snapshot_qty::text AS snapshot_qty, i.snapshot_version::text AS snapshot_version,
+            i.counted_qty::text AS counted_qty, i.count_cutoff_version::text AS count_cutoff_version,
+            i.counted_at, i.counted_by, i.draft_version::text AS draft_version,
+            i.reservation_token, i.reserved_by, i.reservation_version::text AS reservation_version,
+            i.reservation_expires_at
+     FROM stock_opname_items i JOIN products p ON p.id = i.product_id
+     WHERE i.session_id = $1 AND i.counted_qty IS NOT NULL
+     ORDER BY i.product_id`,
+    [sessionId],
+  );
+  return result.rows.map(toItem);
+}
+
+export async function reconcileCountedItems(
+  database: Database,
+  storeId: string,
+  items: readonly StockOpnameItem[],
+): Promise<Map<string, { expectedAtCount: string; variance: string; currentQuantity: string; currentVersion: string; nextQuantity: string; nextVersion: string }>> {
+  if (items.length === 0) return new Map();
+  const productIds = items.map((item) => item.productId);
+  const snapshots = items.map((item) => item.snapshotQty);
+  const snapshotVersions = items.map((item) => item.snapshotVersion);
+  const cutoffs = items.map((item) => item.countCutoffVersion!);
+  const counts = items.map((item) => item.countedQty!);
+  const result = await database.query<QueryResultRow & {
+    product_id: string; expected_at_count: string; variance: string; current_quantity: string;
+    current_version: string; next_quantity: string; next_version: string;
+  }>(
+    `WITH counted AS (
+       SELECT * FROM unnest($2::uuid[], $3::numeric[], $4::bigint[], $5::bigint[], $6::numeric[])
+         AS c(product_id, snapshot_qty, snapshot_version, cutoff_version, counted_qty)
+     ), locked AS (
+       SELECT b.product_id, b.quantity, b.version
+       FROM inventory_balances b
+       JOIN counted c ON c.product_id = b.product_id
+       WHERE b.store_id = $1
+       ORDER BY b.product_id
+       FOR UPDATE
+     ), reconciled AS (
+       SELECT c.product_id,
+              c.snapshot_qty + COALESCE(SUM(m.quantity_delta) FILTER (
+                WHERE m.inventory_version > c.snapshot_version AND m.inventory_version <= c.cutoff_version
+              ), 0) AS expected_at_count,
+              l.quantity AS current_quantity, l.version AS current_version, c.counted_qty
+       FROM counted c
+       JOIN locked l ON l.product_id = c.product_id
+       LEFT JOIN inventory_movements m ON m.store_id = $1 AND m.product_id = c.product_id
+       GROUP BY c.product_id, c.snapshot_qty, c.snapshot_version, c.cutoff_version, c.counted_qty, l.quantity, l.version
+     )
+     SELECT product_id, expected_at_count::text, (counted_qty - expected_at_count)::text AS variance,
+            current_quantity::text, current_version::text,
+            (current_quantity + counted_qty - expected_at_count)::text AS next_quantity,
+            (current_version + 1)::text AS next_version
+     FROM reconciled
+     WHERE current_version >= (SELECT cutoff_version FROM counted WHERE counted.product_id = reconciled.product_id)
+       AND (
+         (SELECT cutoff_version = snapshot_version FROM counted WHERE counted.product_id = reconciled.product_id)
+         OR EXISTS (
+           SELECT 1 FROM inventory_movements cutoff_movement
+           WHERE cutoff_movement.store_id = $1
+             AND cutoff_movement.product_id = reconciled.product_id
+             AND cutoff_movement.inventory_version = (SELECT cutoff_version FROM counted WHERE counted.product_id = reconciled.product_id)
+         )
+       )
+     ORDER BY product_id`,
+    [storeId, productIds, snapshots, snapshotVersions, cutoffs, counts],
+  );
+  if (result.rows.length !== items.length) throw new Error('Count cutoff or inventory balance is invalid.');
+  return new Map(result.rows.map((row) => [row.product_id, {
+    expectedAtCount: row.expected_at_count,
+    variance: row.variance,
+    currentQuantity: row.current_quantity,
+    currentVersion: row.current_version,
+    nextQuantity: row.next_quantity,
+    nextVersion: row.next_version,
+  }]));
+}
+
+export async function insertApprovalAdjustment(
+  database: Database,
+  values: { storeId: string; productId: string; sessionId: string; actorId: string; quantityDelta: string; version: string; nextQuantity: string },
+): Promise<void> {
+  await database.query(
+    `INSERT INTO inventory_movements (
+       store_id, product_id, inventory_version, movement_type, quantity_delta,
+       reference_type, reference_id, stock_opname_session_id, actor_id
+     ) VALUES ($1, $2, $3::bigint, 'STOCK_OPNAME_ADJUSTMENT', $4::numeric,
+               'STOCK_OPNAME_SESSION', $5, $5, $6)`,
+    [values.storeId, values.productId, values.version, values.quantityDelta, values.sessionId, values.actorId],
+  );
+  await database.query(
+    `UPDATE inventory_balances SET quantity = $3::numeric, version = $4::bigint
+     WHERE store_id = $1 AND product_id = $2`,
+    [values.storeId, values.productId, values.nextQuantity, values.version],
+  );
+}
+
+export async function approveSession(database: Database, sessionId: string, actorId: string): Promise<boolean> {
+  const result = await database.query(
+    `UPDATE stock_opname_sessions
+     SET status = 'APPROVED', approved_by = $2, approved_at = transaction_timestamp()
+     WHERE id = $1 AND status = 'SUBMITTED'`,
+    [sessionId, actorId],
+  );
+  return result.rowCount === 1;
+}
+
+export async function rejectSession(database: Database, sessionId: string, actorId: string, reason: string): Promise<boolean> {
+  const result = await database.query(
+    `UPDATE stock_opname_sessions
+     SET status = 'REJECTED', rejected_by = $2, rejected_at = transaction_timestamp(), rejection_reason = $3
+     WHERE id = $1 AND status = 'SUBMITTED'`,
+    [sessionId, actorId, reason],
+  );
+  return result.rowCount === 1;
+}
+
 function toSession(row: SessionRow): StockOpnameSession {
   return {
     id: row.id, storeId: row.store_id, status: row.status, initiatedBy: row.initiated_by,
     initiatedAt: row.initiated_at.toISOString(), submittedBy: row.submitted_by,
     submittedAt: row.submitted_at?.toISOString() ?? null,
+    approvedBy: row.approved_by, approvedAt: row.approved_at?.toISOString() ?? null,
+    rejectedBy: row.rejected_by, rejectedAt: row.rejected_at?.toISOString() ?? null,
+    rejectionReason: row.rejection_reason,
   };
 }
 

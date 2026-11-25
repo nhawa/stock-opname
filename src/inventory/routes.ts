@@ -18,7 +18,7 @@ const commandSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
 }).strict();
 
-const endpointReferenceTypes: Record<MovementType, string> = {
+const endpointReferenceTypes: Record<Exclude<MovementType, 'STOCK_OPNAME_ADJUSTMENT'>, string> = {
   OPENING_BALANCE: 'OPENING_BALANCE',
   RECEIPT: 'GOODS_RECEIPT',
   STOCK_OUT: 'STOCK_OUT',
@@ -54,7 +54,7 @@ export function createInventoryRouter(database: Database & Partial<TransactionCa
 function addMovementRoute(
   router: Router,
   path: string,
-  movementType: MovementType,
+  movementType: Exclude<MovementType, 'STOCK_OPNAME_ADJUSTMENT'>,
   database: Database & Partial<TransactionCapableDatabase>,
   config: AppConfig,
 ): void {
