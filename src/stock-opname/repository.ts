@@ -302,7 +302,7 @@ export async function insertApprovalAdjustment(
        store_id, product_id, inventory_version, movement_type, quantity_delta,
        reference_type, reference_id, stock_opname_session_id, actor_id
      ) VALUES ($1, $2, $3::bigint, 'STOCK_OPNAME_ADJUSTMENT', $4::numeric,
-               'STOCK_OPNAME_SESSION', $5, $5, $6)`,
+               'STOCK_OPNAME_SESSION', $5::text, $5::uuid, $6)`,
     [values.storeId, values.productId, values.version, values.quantityDelta, values.sessionId, values.actorId],
   );
   await database.query(

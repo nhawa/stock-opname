@@ -133,20 +133,22 @@ test('manager review and approval reconcile against cutoff while preserving late
   await request(app).post('/api/inventory/stock-outs').set('Authorization', `Bearer ${manager}`)
     .send({ productId: rice, quantity: '5', referenceType: 'STOCK_OUT', referenceId: `review-sale-${session.id}`, idempotencyKey: `review-sale-${session.id}` }).expect(201);
   const reservation = await reserve(staff, session.id);
-  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '93').then((response) => assert.equal(response.status, 200));
+  const expectedAtCount = (Number(snapshot.snapshotQty) - 5).toFixed(3);
+  const countedQty = (Number(expectedAtCount) - 2).toFixed(3);
+  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, countedQty).then((response) => assert.equal(response.status, 200));
   await request(app).post('/api/inventory/receipts').set('Authorization', `Bearer ${manager}`)
     .send({ productId: rice, quantity: '20', referenceType: 'GOODS_RECEIPT', referenceId: `review-receipt-${session.id}`, idempotencyKey: `review-receipt-${session.id}` }).expect(201);
   await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
 
   const review = await request(app).get(`/api/stock-opname/sessions/${session.id}/review`).set('Authorization', `Bearer ${manager}`).expect(200);
   const item = review.body.items.find((candidate: { productId: string }) => candidate.productId === rice);
-  assert.equal(item.expectedAtCount, '95.000');
+  assert.equal(item.expectedAtCount, expectedAtCount);
   assert.equal(item.variance, '-2.000');
   const approved = await request(app).post(`/api/stock-opname/sessions/${session.id}/approve`).set('Authorization', `Bearer ${manager}`).send({}).expect(200);
   assert.equal(approved.body.status, 'APPROVED');
   const balance = await pool.query<{ quantity: string; version: string }>('SELECT quantity::text AS quantity, version::text AS version FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice]);
-  assert.equal(balance.rows[0]!.quantity, '113.000');
-  assert.equal(Number(balance.rows[0]!.version), Number(snapshot.snapshotVersion) + 4);
+  assert.equal(balance.rows[0]!.quantity, (Number(snapshot.snapshotQty) + 13).toFixed(3));
+  assert.equal(Number(balance.rows[0]!.version), Number(snapshot.snapshotVersion) + 3);
 });
 
 test('rejection preserves inventory and permits a recount session', async () => {

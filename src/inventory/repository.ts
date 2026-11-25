@@ -72,6 +72,39 @@ export async function lockBalance(database: Database, storeId: string, productId
   return result.rows[0]!;
 }
 
+export async function calculateNextBalance(
+  database: Database,
+  storeId: string,
+  productId: string,
+  quantityDelta: string,
+): Promise<{ nextQuantity: string; nextVersion: string; hasOpeningBalance: boolean; isNonNegative: boolean; isWithinRange: boolean }> {
+  const result = await database.query<QueryResultRow & {
+    next_quantity: string;
+    next_version: string;
+    has_opening_balance: boolean;
+    is_non_negative: boolean;
+    is_within_range: boolean;
+  }>(
+    `SELECT (quantity + $3::numeric)::text AS next_quantity,
+            (version + 1)::text AS next_version,
+            version <> 0 AS has_opening_balance,
+            quantity + $3::numeric >= 0 AS is_non_negative,
+            quantity + $3::numeric <= 99999999999.999::numeric AS is_within_range
+     FROM inventory_balances
+     WHERE store_id = $1 AND product_id = $2`,
+    [storeId, productId, quantityDelta],
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error('Inventory balance is required.');
+  return {
+    nextQuantity: row.next_quantity,
+    nextVersion: row.next_version,
+    hasOpeningBalance: row.has_opening_balance,
+    isNonNegative: row.is_non_negative,
+    isWithinRange: row.is_within_range,
+  };
+}
+
 export async function findMovementByIdempotencyKey(
   database: Database,
   storeId: string,
