@@ -9,7 +9,7 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:typecheck": "tsc --noEmit",
     "db:verify": "tsx --test test/database-schema.test.ts",
-    "api:dev": "tsx src/server.ts",
+    "api:dev": "tsx --env-file=.env src/server.ts",
     "test:api": "tsx --test --test-concurrency=1 test/auth.integration.test.ts test/inventory.integration.test.ts test/stock-opname.integration.test.ts",
     "test:transactions": "tsx --test test/db.transaction.test.ts",
     "test:all": "npm run db:verify && npm run test:transactions && npm run test:api"
