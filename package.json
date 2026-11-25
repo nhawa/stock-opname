@@ -1,0 +1,34 @@
+{
+  "name": "stock-opname-management-system",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "db:migrate": "tsx scripts/migrate.ts up",
+    "db:rollback": "tsx scripts/migrate.ts down",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:typecheck": "tsc --noEmit",
+    "db:verify": "tsx --test test/database-schema.test.ts",
+    "api:dev": "tsx src/server.ts",
+    "test:api": "tsx --test --test-concurrency=1 test/auth.integration.test.ts test/inventory.integration.test.ts",
+    "test:all": "npm run db:verify && npm run test:api"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.13.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

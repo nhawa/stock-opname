@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS inventory_movements;
+DROP TABLE IF EXISTS stock_opname_items;
+DROP TABLE IF EXISTS stock_opname_sessions;
+DROP TABLE IF EXISTS inventory_balances;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS stores;
+DROP FUNCTION IF EXISTS set_updated_at();
