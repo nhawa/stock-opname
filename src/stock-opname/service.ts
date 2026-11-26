@@ -82,15 +82,15 @@ export async function saveDraftCounts(
   storeId: string,
   actorId: string,
   sessionId: string,
-  counts: readonly { productId: string; reservationToken: string; draftVersion: string; countedQty: string }[],
+  counts: readonly { productId: string; reservationToken: string; countedQty: string }[],
 ): Promise<StockOpnameItem[]> {
   return withTransaction(database, async (client) => {
     const session = await lockSessionOperation(client, storeId, sessionId);
     if (!session) throw new AppError(404, 'SESSION_NOT_FOUND', 'Stock opname session not found.');
     if (session.status !== 'COUNTING') throw new AppError(409, 'SESSION_NOT_COUNTING', 'Session is not accepting counts.');
     for (const count of [...counts].sort((left, right) => left.productId.localeCompare(right.productId))) {
-      const saved = await saveDraftItem(client, sessionId, count.productId, actorId, count.reservationToken, count.draftVersion, count.countedQty);
-      if (!saved) throw new AppError(409, 'STALE_DRAFT', 'Count reservation or draft version is no longer current.');
+      const saved = await saveDraftItem(client, sessionId, count.productId, actorId, count.reservationToken, count.countedQty);
+      if (!saved) throw new AppError(409, 'STALE_DRAFT', 'Count reservation is no longer current.');
     }
     return listItems(client, sessionId, counts.map((count) => count.productId));
   });

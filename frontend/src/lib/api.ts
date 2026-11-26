@@ -1,7 +1,8 @@
 export type Role = "STAFF" | "MANAGER";
 export type Status = "COUNTING" | "SUBMITTED" | "APPROVED" | "REJECTED";
 export type User = { id: string; storeId: string; email: string; name: string; role: Role };
-export type SessionItem = { id: string; productId: string; sku: string; name: string; unit: string; snapshotQty: string; snapshotVersion: string; countedQty: string | null; countCutoffVersion: string | null; countedAt: string | null; countedBy: string | null; draftVersion: string; reservationToken: string | null; reservedBy: string | null; reservationVersion: string | null; reservationExpiresAt: string | null };
+// Manager responses include reconciliation fields. STAFF responses are blind-count DTOs and omit them.
+export type SessionItem = { id: string; productId: string; sku: string; name: string; unit: string; countedQty: string | null; countedAt: string | null; reservationToken: string | null; reservationStatus?: "AVAILABLE" | "RESERVED" | "COUNTED"; snapshotQty?: string; snapshotVersion?: string; countCutoffVersion?: string | null; countedBy?: string | null; draftVersion?: string; reservedBy?: string | null; reservationVersion?: string | null; reservationExpiresAt?: string | null };
 export type Session = { id: string; storeId: string; status: Status; initiatedBy: string; initiatedAt: string; submittedBy: string | null; submittedAt: string | null; approvedBy: string | null; approvedAt: string | null; rejectedBy: string | null; rejectedAt: string | null; rejectionReason: string | null; items?: SessionItem[] };
 export type Review = Omit<Session, "items"> & { items: (SessionItem & { expectedAtCount: string; variance: string })[] };
 export type InventoryBalance = { id: string; sku: string; name: string; unit: string; quantity: string; version: string };
@@ -39,7 +40,7 @@ export const api = {
   session: (id: string) => request<Session>(`/stock-opname/sessions/${id}`),
   initiate: () => request<Session>("/stock-opname/sessions", { method: "POST", body: "{}" }),
   reserve: (sessionId: string, productId: string) => request<SessionItem>(`/stock-opname/sessions/${sessionId}/counts/reservations`, { method: "POST", body: JSON.stringify({ productId }) }),
-  saveDraft: (sessionId: string, counts: { productId: string; reservationToken: string; draftVersion: string; countedQty: string }[]) => request<SessionItem[]>(`/stock-opname/sessions/${sessionId}/counts/draft`, { method: "POST", body: JSON.stringify({ counts }) }),
+  saveDraft: (sessionId: string, counts: { productId: string; reservationToken: string; countedQty: string }[]) => request<SessionItem[]>(`/stock-opname/sessions/${sessionId}/counts/draft`, { method: "POST", body: JSON.stringify({ counts }) }),
   submit: (id: string) => request<Session>(`/stock-opname/sessions/${id}/submit`, { method: "POST", body: "{}" }),
   review: (id: string) => request<Review>(`/stock-opname/sessions/${id}/review`),
   approve: (id: string) => request<Session>(`/stock-opname/sessions/${id}/approve`, { method: "POST", body: "{}" }),

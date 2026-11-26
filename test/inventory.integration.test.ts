@@ -48,7 +48,7 @@ async function login(email: string): Promise<string> {
   return response.body.accessToken as string;
 }
 
-test('manager posts idempotent inventory movements and staff may only read', async () => {
+test('manager posts idempotent inventory movements and STAFF cannot read balances', async () => {
   const manager = await login('manager.jakarta@example.test');
   const staff = await login('staff.jakarta@example.test');
   const opening = {
@@ -81,7 +81,8 @@ test('manager posts idempotent inventory movements and staff may only read', asy
   await request(app).post('/api/inventory/receipts').set('Authorization', `Bearer ${staff}`).send({}).expect(403);
   const products = await request(app).get('/api/products').set('Authorization', `Bearer ${staff}`).expect(200);
   assert.ok(products.body.some((item: { id: string }) => item.id === rice));
-  const balances = await request(app).get('/api/inventory').set('Authorization', `Bearer ${staff}`).expect(200);
+  await request(app).get('/api/inventory').set('Authorization', `Bearer ${staff}`).expect(403);
+  const balances = await request(app).get('/api/inventory').set('Authorization', `Bearer ${manager}`).expect(200);
   const balance = balances.body.find((item: { id: string }) => item.id === rice);
   assert.equal(balance.quantity, '12.500');
   assert.equal(balance.version, '2');

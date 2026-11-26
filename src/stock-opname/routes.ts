@@ -4,6 +4,7 @@ import { authenticate, requireRoles } from '../auth/middleware.js';
 import { AppError } from '../errors.js';
 import type { AppConfig, Database, TransactionCapableDatabase } from '../types.js';
 import { approveSession, getSessionDetail, getSessionReview, initiateSession, listStoreSessions, rejectSession, reserveCount, saveDraftCounts, submitSession } from './service.js';
+import type { StaffStockOpnameItem, StaffStockOpnameSession, StockOpnameItem, StockOpnameSession } from './types.js';
 
 const uuidSchema = z.string().regex(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
@@ -17,7 +18,6 @@ const draftSchema = z.object({
   counts: z.array(z.object({
     productId: uuidSchema,
     reservationToken: uuidSchema,
-    draftVersion: z.string().regex(/^\d+$/),
     countedQty: quantitySchema,
   }).strict()).min(1).max(25),
 }).strict();
@@ -28,14 +28,14 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
 
   router.get('/stock-opname/sessions', auth, async (request, response, next) => {
     try {
-      response.status(200).json(await listStoreSessions(requireTransactionDatabase(database), request.auth!.storeId));
+      response.status(200).json(toRoleSessionList(await listStoreSessions(requireTransactionDatabase(database), request.auth!.storeId), request.auth!.role, request.auth!.id));
     } catch (error) { next(error); }
   });
 
   router.get('/stock-opname/sessions/:sessionId', auth, async (request, response, next) => {
     try {
       const sessionId = uuidSchema.parse(request.params.sessionId);
-      response.status(200).json(await getSessionDetail(requireTransactionDatabase(database), request.auth!.storeId, sessionId));
+      response.status(200).json(toRoleSession(await getSessionDetail(requireTransactionDatabase(database), request.auth!.storeId, sessionId), request.auth!.role, request.auth!.id));
     } catch (error) { next(error); }
   });
 
@@ -51,14 +51,14 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
       requireJson(request.is('application/json'));
       const sessionId = uuidSchema.parse(request.params.sessionId);
       const body = reservationSchema.parse(request.body);
-      response.status(201).json(await reserveCount(
+      response.status(201).json(toStaffItem(await reserveCount(
         requireTransactionDatabase(database),
         request.auth!.storeId,
         request.auth!.id,
         sessionId,
         body.productId,
         config.stockOpname.countReservationActiveSeconds,
-      ));
+      ), request.auth!.id));
     } catch (error) { next(error); }
   });
 
@@ -69,7 +69,7 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
       const body = draftSchema.parse(request.body);
       const ids = new Set(body.counts.map((count) => count.productId));
       if (ids.size !== body.counts.length) throw new AppError(400, 'VALIDATION_ERROR', 'Each product may appear only once.');
-      response.status(200).json(await saveDraftCounts(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId, body.counts));
+      response.status(200).json((await saveDraftCounts(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId, body.counts)).map((item) => toStaffItem(item, request.auth!.id)));
     } catch (error) { next(error); }
   });
 
@@ -101,11 +101,39 @@ export function createStockOpnameRouter(database: Database & Partial<Transaction
     try {
       requireJson(request.is('application/json'));
       const sessionId = uuidSchema.parse(request.params.sessionId);
-      response.status(200).json(await submitSession(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId));
+      response.status(200).json(toRoleSession(await submitSession(requireTransactionDatabase(database), request.auth!.storeId, request.auth!.id, sessionId), request.auth!.role, request.auth!.id));
     } catch (error) { next(error); }
   });
 
   return router;
+}
+
+function toRoleSessionList(sessions: StockOpnameSession[], role: 'STAFF' | 'MANAGER', actorId: string): StockOpnameSession[] | StaffStockOpnameSession[] {
+  return role === 'MANAGER' ? sessions : sessions.map((session) => toStaffSession(session, actorId));
+}
+
+function toRoleSession(session: StockOpnameSession, role: 'STAFF' | 'MANAGER', actorId: string): StockOpnameSession | StaffStockOpnameSession {
+  return role === 'MANAGER' ? session : toStaffSession(session, actorId);
+}
+
+function toStaffSession(session: StockOpnameSession, actorId: string): StaffStockOpnameSession {
+  const { items, ...summary } = session;
+  return { ...summary, items: items?.map((item) => toStaffItem(item, actorId)) };
+}
+
+function toStaffItem(item: StockOpnameItem, actorId: string): StaffStockOpnameItem {
+  const isReserved = item.reservationToken !== null && item.reservationExpiresAt !== null && new Date(item.reservationExpiresAt) > new Date();
+  return {
+    id: item.id,
+    productId: item.productId,
+    sku: item.sku,
+    name: item.name,
+    unit: item.unit,
+    countedQty: item.countedQty,
+    countedAt: item.countedAt,
+    reservationToken: isReserved && item.reservedBy === actorId ? item.reservationToken : null,
+    reservationStatus: item.countedQty !== null ? 'COUNTED' : isReserved ? 'RESERVED' : 'AVAILABLE',
+  };
 }
 
 function requireTransactionDatabase(database: Database & Partial<TransactionCapableDatabase>): TransactionCapableDatabase {

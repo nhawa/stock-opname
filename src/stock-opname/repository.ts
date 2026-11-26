@@ -182,19 +182,18 @@ export async function saveDraftItem(
   productId: string,
   actorId: string,
   token: string,
-  draftVersion: string,
   countedQty: string,
 ): Promise<boolean> {
   const result = await database.query(
     `UPDATE stock_opname_items
-     SET counted_qty = $6::numeric, count_cutoff_version = reservation_version,
+     SET counted_qty = $5::numeric, count_cutoff_version = reservation_version,
          counted_at = transaction_timestamp(), counted_by = $3,
          draft_version = draft_version + 1,
          reservation_token = NULL, reserved_by = NULL, reservation_version = NULL, reservation_expires_at = NULL
      WHERE session_id = $1 AND product_id = $2 AND counted_qty IS NULL
        AND reservation_token = $4 AND reserved_by = $3
-       AND draft_version = $5::bigint AND reservation_expires_at > transaction_timestamp()`,
-    [sessionId, productId, actorId, token, draftVersion, countedQty],
+       AND reservation_expires_at > transaction_timestamp()`,
+    [sessionId, productId, actorId, token, countedQty],
   );
   return result.rowCount === 1;
 }

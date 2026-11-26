@@ -37,18 +37,18 @@ async function createSession(manager: string): Promise<{ id: string; items: { pr
   return response.body;
 }
 
-async function reserve(staff: string, sessionId: string, productId = rice): Promise<{ reservationToken: string; draftVersion: string }> {
+async function reserve(staff: string, sessionId: string, productId = rice): Promise<{ reservationToken: string }> {
   const response = await request(app)
     .post(`/api/stock-opname/sessions/${sessionId}/counts/reservations`)
     .set('Authorization', `Bearer ${staff}`).send({ productId }).expect(201);
   return response.body;
 }
 
-async function save(staff: string, sessionId: string, productId: string, reservationToken: string, draftVersion: string, countedQty: string): Promise<request.Response> {
+async function save(staff: string, sessionId: string, productId: string, reservationToken: string, countedQty: string): Promise<request.Response> {
   return request(app)
     .post(`/api/stock-opname/sessions/${sessionId}/counts/draft`)
     .set('Authorization', `Bearer ${staff}`)
-    .send({ counts: [{ productId, reservationToken, draftVersion, countedQty }] });
+    .send({ counts: [{ productId, reservationToken, countedQty }] });
 }
 
 test('manager initiates an active-product snapshot after prior movements', async () => {
@@ -96,12 +96,12 @@ test('partial draft preserves zero as a count and rejects duplicate SKUs', async
   const reservation = await reserve(staff, session.id);
   const duplicate = await request(app).post(`/api/stock-opname/sessions/${session.id}/counts/draft`).set('Authorization', `Bearer ${staff}`).send({
     counts: [
-      { productId: rice, reservationToken: reservation.reservationToken, draftVersion: reservation.draftVersion, countedQty: '0' },
-      { productId: rice, reservationToken: reservation.reservationToken, draftVersion: reservation.draftVersion, countedQty: '0' },
+      { productId: rice, reservationToken: reservation.reservationToken, countedQty: '0' },
+      { productId: rice, reservationToken: reservation.reservationToken, countedQty: '0' },
     ],
   });
   assert.equal(duplicate.status, 400);
-  const saved = await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '0');
+  const saved = await save(staff, session.id, rice, reservation.reservationToken, '0');
   assert.equal(saved.status, 200);
   assert.equal(saved.body[0].countedQty, '0.000');
   const detail = await request(app).get(`/api/stock-opname/sessions/${session.id}`).set('Authorization', `Bearer ${staff}`).expect(200);
@@ -114,8 +114,8 @@ test('concurrent drafts resolve to one save and a stale-draft conflict', async (
   const session = await createSession(manager);
   const reservation = await reserve(staff, session.id);
   const [first, second] = await Promise.all([
-    save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '2'),
-    save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '2'),
+    save(staff, session.id, rice, reservation.reservationToken, '2'),
+    save(staff, session.id, rice, reservation.reservationToken, '2'),
   ]);
   assert.equal([first.status, second.status].filter((status) => status === 200).length, 1);
   assert.equal([first.status, second.status].filter((status) => status === 409).length, 1);
@@ -124,7 +124,7 @@ test('concurrent drafts resolve to one save and a stale-draft conflict', async (
 async function submitCount(manager: string, staff: string, quantity: string): Promise<{ id: string }> {
   const session = await createSession(manager);
   const reservation = await reserve(staff, session.id);
-  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, quantity).then((response) => assert.equal(response.status, 200));
+  await save(staff, session.id, rice, reservation.reservationToken, quantity).then((response) => assert.equal(response.status, 200));
   await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
   return session;
 }
@@ -153,7 +153,7 @@ test('manager review and approval reconcile against cutoff while preserving late
   const reservation = await reserve(staff, session.id);
   const expectedAtCount = (Number(snapshot.snapshotQty) - 5).toFixed(3);
   const countedQty = (Number(expectedAtCount) - 2).toFixed(3);
-  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, countedQty).then((response) => assert.equal(response.status, 200));
+  await save(staff, session.id, rice, reservation.reservationToken, countedQty).then((response) => assert.equal(response.status, 200));
   await request(app).post('/api/inventory/receipts').set('Authorization', `Bearer ${manager}`)
     .send({ productId: rice, quantity: '20', referenceType: 'GOODS_RECEIPT', referenceId: `review-receipt-${session.id}`, idempotencyKey: `review-receipt-${session.id}` }).expect(201);
   await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
@@ -212,15 +212,15 @@ test('expired reservations can be reclaimed and cannot save using the stale toke
   const staleResponse = await request(shortReservationApp)
     .post(`/api/stock-opname/sessions/${session.id}/counts/reservations`)
     .set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(201);
-  const stale = staleResponse.body as { reservationToken: string; draftVersion: string };
+  const stale = staleResponse.body as { reservationToken: string };
   await new Promise((resolve) => setTimeout(resolve, 1_100));
   const replacementResponse = await request(shortReservationApp)
     .post(`/api/stock-opname/sessions/${session.id}/counts/reservations`)
     .set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(201);
-  const replacement = replacementResponse.body as { reservationToken: string; draftVersion: string };
-  const staleSave = await save(staff, session.id, rice, stale.reservationToken, stale.draftVersion, '1');
+  const replacement = replacementResponse.body as { reservationToken: string };
+  const staleSave = await save(staff, session.id, rice, stale.reservationToken, '1');
   assert.equal(staleSave.status, 409);
-  const recoveredSave = await save(staff, session.id, rice, replacement.reservationToken, replacement.draftVersion, '1');
+  const recoveredSave = await save(staff, session.id, rice, replacement.reservationToken, '1');
   assert.equal(recoveredSave.status, 200);
 });
 
@@ -258,12 +258,39 @@ test('submission leaves inventory unchanged and blocks later edits', async () =>
     'SELECT quantity::text AS quantity, version::text AS version FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice],
   );
   const reservation = await reserve(staff, session.id);
-  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '0').then((response) => assert.equal(response.status, 200));
+  await save(staff, session.id, rice, reservation.reservationToken, '0').then((response) => assert.equal(response.status, 200));
   await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
   const afterBalance = await pool.query<{ quantity: string; version: string }>(
     'SELECT quantity::text AS quantity, version::text AS version FROM inventory_balances WHERE store_id = $1 AND product_id = $2', [jakartaStore, rice],
   );
   assert.deepEqual(afterBalance.rows, before.rows);
   await request(app).post(`/api/stock-opname/sessions/${session.id}/counts/reservations`).set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(409);
-  await save(staff, session.id, rice, reservation.reservationToken, reservation.draftVersion, '1').then((response) => assert.equal(response.status, 409));
+  await save(staff, session.id, rice, reservation.reservationToken, '1').then((response) => assert.equal(response.status, 409));
+});
+
+test('STAFF blind-count contracts omit all system inventory fields and retain an opaque reservation capability', async () => {
+  const manager = await login('manager.jakarta@example.test');
+  const staff = await login('staff.jakarta@example.test');
+  const session = await createSession(manager);
+  const forbiddenFields = ['snapshotQty', 'snapshotVersion', 'countCutoffVersion', 'expectedAtCount', 'variance', 'draftVersion', 'reservationVersion', 'reservationExpiresAt', 'reservedBy'];
+  const assertBlind = (body: unknown): void => {
+    const serialized = JSON.stringify(body);
+    for (const field of forbiddenFields) assert.equal(serialized.includes(`\"${field}\"`), false, `STAFF response leaked ${field}`);
+  };
+
+  const sessions = await request(app).get('/api/stock-opname/sessions').set('Authorization', `Bearer ${staff}`).expect(200);
+  assertBlind(sessions.body);
+  const detail = await request(app).get(`/api/stock-opname/sessions/${session.id}`).set('Authorization', `Bearer ${staff}`).expect(200);
+  assertBlind(detail.body);
+  const reservation = await request(app).post(`/api/stock-opname/sessions/${session.id}/counts/reservations`).set('Authorization', `Bearer ${staff}`).send({ productId: rice }).expect(201);
+  assertBlind(reservation.body);
+  assert.match(reservation.body.reservationToken, /^[0-9a-f-]{36}$/i);
+  const draft = await save(staff, session.id, rice, reservation.body.reservationToken, '3');
+  assert.equal(draft.status, 200);
+  assertBlind(draft.body);
+  const submitted = await request(app).post(`/api/stock-opname/sessions/${session.id}/submit`).set('Authorization', `Bearer ${staff}`).send({}).expect(200);
+  assertBlind(submitted.body);
+
+  await request(app).get('/api/inventory').set('Authorization', `Bearer ${staff}`).expect(403);
+  await request(app).get(`/api/stock-opname/sessions/${session.id}/review`).set('Authorization', `Bearer ${staff}`).expect(403);
 });

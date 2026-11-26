@@ -43,3 +43,23 @@ export interface StockOpnameReviewItem extends StockOpnameItem {
 export interface StockOpnameReview extends Omit<StockOpnameSession, 'items'> {
   items: StockOpnameReviewItem[];
 }
+
+/** Full manager-only view, including inventory reconciliation fields. */
+export type ManagerStockOpnameSession = StockOpnameSession;
+
+/** Blind-count view. The reservation token is an opaque, single-use capability. */
+export interface StaffStockOpnameItem {
+  id: string;
+  productId: string;
+  sku: string;
+  name: string;
+  unit: string;
+  countedQty: string | null;
+  countedAt: string | null;
+  reservationToken: string | null;
+  reservationStatus: 'AVAILABLE' | 'RESERVED' | 'COUNTED';
+}
+
+export interface StaffStockOpnameSession extends Omit<StockOpnameSession, 'items'> {
+  items?: StaffStockOpnameItem[];
+}

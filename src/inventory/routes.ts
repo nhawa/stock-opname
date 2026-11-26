@@ -41,7 +41,7 @@ export function createInventoryRouter(database: Database & Partial<TransactionCa
     }
   });
 
-  router.get('/inventory', auth, async (request, response, next) => {
+  router.get('/inventory', auth, requireRoles('MANAGER'), async (request, response, next) => {
     try {
       response.status(200).json(await listStoreBalances(database, request.auth!.storeId));
     } catch (error) {
