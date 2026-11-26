@@ -71,7 +71,7 @@ To reset the isolated test data, migrate, seed, and run the complete backend sui
 ./scripts/test-reset-and-verify.sh
 ```
 
-This script truncates only the database identified by `DATABASE_URL_TEST`; never point that variable at development or production data.
+This script recreates the `public` schema in the database identified by `DATABASE_URL_TEST`, then reapplies migrations and seed data; never point that variable at development or production data.
 
 Additional checks:
 
