@@ -19,6 +19,28 @@ set +a
 : "${POSTGRES_TEST_PASSWORD:?POSTGRES_TEST_PASSWORD must be set in .env.test}"
 : "${DATABASE_URL_TEST:?DATABASE_URL_TEST must be set in .env.test}"
 
+# This script is the sole destructive test reset entry point. Refuse anything
+# other than the local disposable Compose database before connecting with psql.
+node --input-type=module <<'NODE'
+const url = new URL(process.env.DATABASE_URL_TEST);
+const expected = {
+  hostname: new Set(['127.0.0.1', 'localhost']),
+  port: '5433',
+  username: 'stock_opname_test',
+};
+const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+const isDisposableTestDatabase = /^stock_opname_test(?:_[a-z0-9]+)?$/i.test(database);
+if (
+  !expected.hostname.has(url.hostname) ||
+  url.port !== expected.port ||
+  decodeURIComponent(url.username) !== expected.username ||
+  !isDisposableTestDatabase
+) {
+  console.error('DATABASE_URL_TEST must target a local disposable stock_opname_test database on port 5433.');
+  process.exit(1);
+}
+NODE
+
 echo "Starting isolated test database..."
 "${compose[@]}" up -d
 
@@ -35,23 +57,16 @@ for attempt in {1..30}; do
   sleep 1
 done
 
-echo "Resetting isolated test data..."
+echo "Recreating the disposable test schema..."
 psql "$DATABASE_URL_TEST" -v ON_ERROR_STOP=1 <<'SQL'
-TRUNCATE TABLE
-  audit_logs,
-  inventory_movements,
-  stock_opname_items,
-  stock_opname_sessions,
-  inventory_balances,
-  products,
-  users,
-  stores
-CASCADE;
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO stock_opname_test;
 SQL
 
-echo "Applying migrations and seed data..."
+echo "Applying migrations and seed data from a clean state..."
 DATABASE_URL="$DATABASE_URL_TEST" npm run db:migrate
 DATABASE_URL="$DATABASE_URL_TEST" npm run db:seed
 
 echo "Running full backend verification..."
-DATABASE_URL_TEST="$DATABASE_URL_TEST" npm run test:all
+DATABASE_URL_TEST="$DATABASE_URL_TEST" npm run test:all:inner
